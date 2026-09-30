@@ -1,0 +1,30 @@
+{
+  "name": "repo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --experimental-strip-types --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mehmetcemyagsii-blip/aractalep.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "bugs": {
+    "url": "https://github.com/mehmetcemyagsii-blip/aractalep/issues"
+  },
+  "homepage": "https://github.com/mehmetcemyagsii-blip/aractalep#readme",
+  "dependencies": {
+    "@netlify/database": "^2.0.1",
+    "@netlify/functions": "^6.0.1",
+    "drizzle-orm": "^1.0.0-beta.22"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^1.0.0-beta.22",
+    "typescript": "^7.0.2"
+  }
+}
