@@ -590,8 +590,8 @@
           <div class="flex items-center gap-2.5">
             <span class="w-3 h-3 rounded-full bg-emerald-500 animate-ping"></span>
             <div>
-              <span class="font-black text-emerald-900 block text-xs">Netlify Yayınına Hazır Hibrit Motor</span>
-              <span class="text-[11px] text-emerald-700">Yerel sekmeler ve cihazlar arası canlı eşitleme aktif.</span>
+              <span class="font-black text-emerald-900 block text-xs">Netlify Database (PostgreSQL) Aktif</span>
+              <span class="text-[11px] text-emerald-700">Tüm kullanıcılar ve cihazlar tek bir merkezi veritabanında eşitlenir.</span>
             </div>
           </div>
           <button onclick="triggerImmediateSync()" class="px-3 py-1.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-black text-[11px] shadow-xs transition flex items-center gap-1 cursor-pointer">
@@ -604,18 +604,18 @@
           
           <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
             <div class="flex items-center justify-between font-bold text-slate-800">
-              <span>1. Canlı Sekme Kanalı (BroadcastChannel)</span>
-              <span class="text-emerald-600 font-black"><i class="fa-solid fa-check mr-1"></i>0 ms Aktif</span>
+              <span>1. Merkezi Bulut Veritabanı (Netlify Database)</span>
+              <span class="text-emerald-600 font-black"><i class="fa-solid fa-cloud mr-1"></i>Canlı &amp; Senkron</span>
             </div>
-            <p class="text-[11px] text-slate-500">Fabrika kantarında ve ofiste açık olan ekranlar sayfayı yenilemeden anında güncellenir.</p>
+            <p class="text-[11px] text-slate-500">Eklediğiniz seferler, plaka bildirimleri, kantar tartımları ve teslimat belgeleri anında buluta yazılır; diğer kullanıcıların ekranlarında otomatik güncellenir.</p>
           </div>
 
           <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
             <div class="flex items-center justify-between font-bold text-slate-800">
-              <span>2. Çakışma Önleyici Akıllı Birleştirme</span>
-              <span class="text-emerald-600 font-black"><i class="fa-solid fa-check mr-1"></i>Aktif</span>
+              <span>2. Canlı Sekme Kanalı (BroadcastChannel)</span>
+              <span class="text-emerald-600 font-black"><i class="fa-solid fa-check mr-1"></i>0 ms Aktif</span>
             </div>
-            <p class="text-[11px] text-slate-500">Zaman damgası korumasıyla eşzamanlı işlem yapan yetkililerin verileri birbirini ezmez.</p>
+            <p class="text-[11px] text-slate-500">Aynı tarayıcıda veya yerel ekranda açık tüm pencereler anında senkronize kalır.</p>
           </div>
         </div>
       </div>
@@ -1980,6 +1980,94 @@
     let activeUser = safeStore.get('elita_session_user', null);
     let currentSeferSection = 'ACTIVE';
 
+    async function apiRequest(method, endpoint, data) {
+      try {
+        const opts = {
+          method: method,
+          headers: { 'Content-Type': 'application/json' }
+        };
+        if (data !== undefined && method !== 'GET' && method !== 'DELETE') {
+          opts.body = JSON.stringify(data);
+        }
+        const res = await fetch(endpoint, opts);
+        if (!res.ok) {
+          console.warn(`API call ${method} ${endpoint} failed:`, res.status);
+        }
+        return await res.json().catch(() => null);
+      } catch (err) {
+        console.warn(`API call ${method} ${endpoint} network error:`, err);
+        return null;
+      }
+    }
+
+    let isCloudSyncing = false;
+    async function fetchCloudData(showToastMsg = false) {
+      if (isCloudSyncing) return;
+      isCloudSyncing = true;
+      const spinner = document.getElementById('syncSpinnerIcon');
+      const badgeText = document.getElementById('syncStatusText');
+      if (spinner) spinner.classList.add('fa-spin');
+      if (badgeText) badgeText.innerText = 'Eşitleniyor...';
+
+      try {
+        const res = await fetch('/api/data');
+        if (res.ok) {
+          const json = await res.json();
+          if (json && json.success) {
+            // Seed client requests to cloud if cloud has no requests yet
+            if (Array.isArray(json.requests) && json.requests.length === 0 && requestsData.length > 0) {
+              apiRequest('POST', '/api/seed-from-client', { requests: requestsData });
+            }
+
+            if (Array.isArray(json.users) && json.users.length > 0) {
+              usersData = json.users;
+              safeStore.set('elita_users', usersData, false);
+            }
+            if (Array.isArray(json.suppliers) && json.suppliers.length > 0) {
+              suppliersData = json.suppliers;
+              safeStore.set('elita_suppliers', suppliersData, false);
+            }
+            if (Array.isArray(json.products) && json.products.length > 0) {
+              productsData = json.products;
+              safeStore.set('elita_products', productsData, false);
+            }
+            if (Array.isArray(json.locations) && json.locations.length > 0) {
+              locationsData = json.locations;
+              safeStore.set('elita_locations', locationsData, false);
+            }
+            if (Array.isArray(json.requests)) {
+              const hasChanged = JSON.stringify(requestsData) !== JSON.stringify(json.requests);
+              requestsData = json.requests;
+              safeStore.set('elita_requests', requestsData, false);
+              if (hasChanged && activeUser) {
+                renderTable();
+              }
+            }
+            if (Array.isArray(json.auditLogs)) {
+              auditLogsData = json.auditLogs;
+              safeStore.set('elita_audit_logs', auditLogsData, false);
+            }
+
+            if (activeUser) {
+              populateDropdowns();
+              renderAdminData();
+            }
+
+            if (badgeText) badgeText.innerText = 'Bulut Senkron';
+            if (showToastMsg) {
+              showToast('Veritabanı ile canlı eşitlendi.', 'success');
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Bulut senkronizasyon hatası:', err);
+        if (badgeText) badgeText.innerText = 'Yerel Mod';
+      } finally {
+        isCloudSyncing = false;
+        if (spinner) spinner.classList.remove('fa-spin');
+      }
+    }
+
     function reloadAllDataFromStorage(showToastMsg = false) {
       usersData = safeStore.get('elita_users', DEFAULT_USERS);
       suppliersData = safeStore.get('elita_suppliers', DEFAULT_SUPPLIERS);
@@ -1996,18 +2084,13 @@
       if (showToastMsg) {
         showToast('Veriler başarıyla eşitlendi.', 'info');
       }
+      fetchCloudData(false);
     }
 
     window.openSyncStatusModal = function() { openModal('modalSyncStatus'); };
 
-    window.triggerImmediateSync = function() {
-      const spinner = document.getElementById('syncSpinnerIcon');
-      if (spinner) spinner.classList.add('fa-spin');
-      setTimeout(() => {
-        reloadAllDataFromStorage(false);
-        if (spinner) spinner.classList.remove('fa-spin');
-        showToast('Canlı senkronizasyon tamamlandı.', 'success');
-      }, 400);
+    window.triggerImmediateSync = async function() {
+      await fetchCloudData(true);
     };
 
     function getUserPermissions(user) {
@@ -2052,6 +2135,7 @@
       };
       auditLogsData.unshift(newLog);
       safeStore.set('elita_audit_logs', auditLogsData);
+      apiRequest('POST', '/api/audit-logs', newLog);
     }
 
     function showToast(message, type = 'info') {
@@ -2098,12 +2182,16 @@
       if (m) m.classList.add('hidden');
     };
 
-    window.handleLoginSubmit = function(e) {
+    window.handleLoginSubmit = async function(e) {
       if (e && e.preventDefault) e.preventDefault();
       const u = (document.getElementById('loginUsername')?.value || '').trim();
       const p = (document.getElementById('loginPassword')?.value || '').trim();
 
-      const user = usersData.find(item => item.username.toLowerCase() === u.toLowerCase() && item.password === p);
+      let user = usersData.find(item => item.username.toLowerCase() === u.toLowerCase() && item.password === p);
+      if (!user) {
+        await fetchCloudData();
+        user = usersData.find(item => item.username.toLowerCase() === u.toLowerCase() && item.password === p);
+      }
       if (!user) {
         showToast('Hatalı kullanıcı adı veya parola.', 'error');
         return;
@@ -2710,6 +2798,7 @@
 
       requestsData.unshift(newReq);
       safeStore.set('elita_requests', requestsData);
+      apiRequest('POST', '/api/requests', newReq);
 
       logAudit('TALEP_OLUSTURULDU', newTalepNo, `Tedarikçi: ${newReq.supplier} • Yük: ${newReq.productName} • Çıkış: ${newReq.origin}`);
       closeModal('modalNewRequest');
@@ -2771,6 +2860,7 @@
       }
 
       safeStore.set('elita_requests', requestsData);
+      apiRequest('PUT', `/api/requests/${encodeURIComponent(req.id)}`, req);
       logAudit('TALEP_REVIZE_EDILDI', req.talepNo, `Talep güncellendi. Revizyon: ${editReason || 'Belirtilmedi'}`);
       closeModal('modalEditRequest');
       renderTable();
@@ -2809,6 +2899,7 @@
       req.updatedAt = Date.now();
 
       safeStore.set('elita_requests', requestsData);
+      apiRequest('PUT', `/api/requests/${encodeURIComponent(req.id)}`, req);
       logAudit('PLAKA_BILDIRILDI', req.talepNo, `Plaka: ${req.truckPlate} / ${req.trailerPlate} • Sürücü: ${req.driverName}`);
       closeModal('modalSubmitPlate');
       renderTable();
@@ -2846,6 +2937,7 @@
       req.updatedAt = Date.now();
 
       safeStore.set('elita_requests', requestsData);
+      apiRequest('PUT', `/api/requests/${encodeURIComponent(req.id)}`, req);
       logAudit('KANTAR_GIRIS_YUKLENDI', req.talepNo, `Giriş: ${req.factoryEntryDate.replace('T', ' ')} • Tartım: ${req.scaleGrossWeight}. Durum: Yüklendi`);
       closeModal('modalScaleEntry');
       renderTable();
@@ -2888,6 +2980,7 @@
         req.updatedAt = Date.now();
 
         safeStore.set('elita_requests', requestsData);
+        apiRequest('PUT', `/api/requests/${encodeURIComponent(req.id)}`, req);
         logAudit('TESLIM_BELGESI_YUKLENDI', req.talepNo, `Evrak: ${file.name} yüklendi. Teslim Alan: ${receiver}. Durum: Teslim Edildi.`);
         closeModal('modalUploadDelivery');
         renderTable();
@@ -2944,6 +3037,7 @@
       req.updatedAt = Date.now();
 
       safeStore.set('elita_requests', requestsData);
+      apiRequest('PUT', `/api/requests/${encodeURIComponent(req.id)}`, req);
       logAudit('PLAKA_GERI_CEKILDI', req.talepNo, `Önceki Plaka: ${oldPlate} geri çekildi. Gerekçe: ${reason}`);
       closeModal('modalRevokePlate');
       renderTable();
@@ -2971,6 +3065,7 @@
       req.updatedAt = Date.now();
 
       safeStore.set('elita_requests', requestsData);
+      apiRequest('PUT', `/api/requests/${encodeURIComponent(req.id)}`, req);
       logAudit('SEFER_IPTAL_EDILDI', req.talepNo, `Sefer iptal edildi. Gerekçe: ${reason}`);
       closeModal('modalCancelRequest');
       renderTable();
@@ -3424,8 +3519,10 @@
         canAccessAdmin: r === 'ADMIN'
       };
 
-      usersData.push({ username: u, password: p, displayName: d, role: r, supplier: s, loadPerm: lp, permissions });
+      const newUser = { username: u, password: p, displayName: d, role: r, supplier: s, loadPerm: lp, permissions };
+      usersData.push(newUser);
       safeStore.set('elita_users', usersData);
+      apiRequest('POST', '/api/users', newUser);
       logAudit('KULLANICI_TANIMLANDI', u, `Yeni kullanıcı: ${d} (${r} - ${lp}) sisteme tanımlandı.`);
       closeModal('modalAddUser');
       renderAdminData();
@@ -3491,6 +3588,7 @@
       };
 
       safeStore.set('elita_users', usersData);
+      apiRequest('PUT', `/api/users/${encodeURIComponent(u.username)}`, u);
 
       if (activeUser && activeUser.username === u.username) {
         activeUser = { ...u };
@@ -3548,6 +3646,7 @@
       }
 
       safeStore.set('elita_suppliers', suppliersData);
+      apiRequest('PUT', `/api/suppliers/${encodeURIComponent(s.id)}`, s);
       logAudit('TEDARIKCI_DUZELTILDI', s.name, `Tedarikçi bilgileri güncellendi: ${oldName} -> ${newName}`);
       closeModal('modalEditSupplier');
       renderAdminData();
@@ -3588,6 +3687,7 @@
       }
 
       safeStore.set('elita_products', productsData);
+      apiRequest('PUT', `/api/products/${encodeURIComponent(p.id)}`, p);
       logAudit('URUN_DUZELTILDI', p.name, `Ürün güncellendi: ${oldName} -> ${newName}`);
       closeModal('modalEditProduct');
       renderAdminData();
@@ -3621,6 +3721,7 @@
       loc.type = newType;
 
       safeStore.set('elita_locations', locationsData);
+      apiRequest('PUT', `/api/locations/${encodeURIComponent(loc.id)}`, loc);
       logAudit('LOKASYON_DUZELTILDI', loc.name, `Lokasyon güncellendi: ${oldName} -> ${newName}`);
       closeModal('modalEditLocation');
       renderAdminData();
@@ -3630,6 +3731,7 @@
     window.deleteUser = function(uname) {
       usersData = usersData.filter(x => x.username !== uname);
       safeStore.set('elita_users', usersData);
+      apiRequest('DELETE', `/api/users/${encodeURIComponent(uname)}`);
       logAudit('KULLANICI_SILINDI', uname, `Kullanıcı silindi.`);
       renderAdminData();
       showToast('Kullanıcı silindi.', 'info');
@@ -3643,8 +3745,10 @@
       const c = (document.getElementById('newSupplierContact')?.value || '').trim();
       const ph = (document.getElementById('newSupplierPhone')?.value || '').trim();
 
-      suppliersData.push({ id: 'SUP-' + Date.now(), name, loadType: lt, contact: c, phone: ph });
+      const newSup = { id: 'SUP-' + Date.now(), name, loadType: lt, contact: c, phone: ph };
+      suppliersData.push(newSup);
       safeStore.set('elita_suppliers', suppliersData);
+      apiRequest('POST', '/api/suppliers', newSup);
       logAudit('TEDARIKCI_EKLENDI', name, `Yeni tedarikçi eklendi: ${name}`);
       closeModal('modalAddSupplier');
       renderAdminData();
@@ -3657,6 +3761,7 @@
       const name = s ? s.name : id;
       suppliersData = suppliersData.filter(x => x.id !== id);
       safeStore.set('elita_suppliers', suppliersData);
+      apiRequest('DELETE', `/api/suppliers/${encodeURIComponent(id)}`);
       logAudit('TEDARIKCI_SILINDI', name, `Tedarikçi silindi.`);
       renderAdminData();
       populateDropdowns();
@@ -3669,8 +3774,10 @@
       const name = (document.getElementById('newProdName')?.value || '').trim();
       const cat = document.getElementById('newProdCategory')?.value;
 
-      productsData.push({ id: 'PRD-' + Date.now(), name, category: cat });
+      const newProd = { id: 'PRD-' + Date.now(), name, category: cat };
+      productsData.push(newProd);
       safeStore.set('elita_products', productsData);
+      apiRequest('POST', '/api/products', newProd);
       logAudit('URUN_EKLENDI', name, `Yeni ürün cinsi eklendi: ${name}`);
       closeModal('modalAddProduct');
       renderAdminData();
@@ -3683,6 +3790,7 @@
       const name = p ? p.name : id;
       productsData = productsData.filter(x => x.id !== id);
       safeStore.set('elita_products', productsData);
+      apiRequest('DELETE', `/api/products/${encodeURIComponent(id)}`);
       logAudit('URUN_SILINDI', name, `Ürün silindi.`);
       renderAdminData();
       populateDropdowns();
@@ -3695,8 +3803,10 @@
       const name = (document.getElementById('newLocName')?.value || '').trim();
       const type = document.getElementById('newLocType')?.value;
 
-      locationsData.push({ id: 'LOC-' + Date.now(), name, type });
+      const newLoc = { id: 'LOC-' + Date.now(), name, type };
+      locationsData.push(newLoc);
       safeStore.set('elita_locations', locationsData);
+      apiRequest('POST', '/api/locations', newLoc);
       logAudit('LOKASYON_EKLENDI', name, `Yeni lokasyon eklendi: ${name}`);
       closeModal('modalAddLocation');
       renderAdminData();
@@ -3708,6 +3818,7 @@
       const name = loc ? loc.name : id;
       locationsData = locationsData.filter(x => x.id !== id);
       safeStore.set('elita_locations', locationsData);
+      apiRequest('DELETE', `/api/locations/${encodeURIComponent(id)}`);
       logAudit('LOKASYON_SILINDI', name, `Lokasyon silindi.`);
       renderAdminData();
       showToast('Lokasyon silindi.', 'info');
@@ -3727,16 +3838,12 @@
       renderTable();
     };
 
-    // Otomatik periyodik kontrol ve gecikme saat takibi
+    // Otomatik periyodik kontrol ve bulut canlı senkronizasyon takibi (3 saniyede bir)
     setInterval(() => {
       if (activeUser) {
-        const storedReqs = safeStore.get('elita_requests', null);
-        if (storedReqs && JSON.stringify(storedReqs) !== JSON.stringify(requestsData)) {
-          requestsData = storedReqs;
-        }
-        renderTable();
+        fetchCloudData(false);
       }
-    }, 5000);
+    }, 3500);
 
     function initApp() {
       updateStatusFilterOptions();
@@ -3752,6 +3859,9 @@
         document.getElementById('authScreen').classList.remove('hidden');
         document.getElementById('appContainer').classList.add('hidden');
       }
+
+      // Başlangıçta bulut veritabanı ile eşitle
+      fetchCloudData(false);
     }
 
     if (document.readyState === 'loading') {
